@@ -26,6 +26,10 @@ if 'f_threshold' not in st.session_state:
     st.session_state.f_threshold = 20
 if 'm_threshold' not in st.session_state:
     st.session_state.m_threshold = 0.0
+if 'funnel_active_steps' not in st.session_state:
+    st.session_state.funnel_active_steps = {
+        '1. 浏览', '2. 互动', '3. 加购', '4. 领券', '5. 用券', '6. 购买'
+    }
 
 # ==================== 辅助函数 ====================
 def safe_rate(numerator, denominator):
@@ -350,21 +354,120 @@ with tab1:
     with left_col:
         st.markdown("#### 用户旅程转化漏斗")
 
-        n_total = len(filtered_df)
-        n_interact = filtered_df[
-            (filtered_df['like_num'] > 0) |
-            (filtered_df['comment_num'] > 0) |
-            (filtered_df['share_num'] > 0) |
-            (filtered_df['collect_num'] > 0) |
-            (filtered_df['is_follow_author'] == 1)
-        ].shape[0]
-        n_add2cart = filtered_df[filtered_df['add2cart'] == 1].shape[0]
-        n_coupon_received = filtered_df[filtered_df['coupon_received'] == 1].shape[0]
-        n_coupon_used = filtered_df[filtered_df['coupon_used'] == 1].shape[0]
-        n_buyers = filtered_df[filtered_df['label'] == 1].shape[0]
+        # ---------- 漏斗环节配置 ----------
+        FUNNEL_ORDER = ['1. 浏览', '2. 互动', '3. 加购', '4. 领券', '5. 用券', '6. 购买']
+        FUNNEL_CONFIG = {
+            '1. 浏览': {
+                'label': '浏览',
+                'filter': None,
+                'color': '#636EFA'
+            },
+            '2. 互动': {
+                'label': '互动',
+                'filter': lambda df: (
+                    (df['like_num'] > 0) |
+                    (df['comment_num'] > 0) |
+                    (df['share_num'] > 0) |
+                    (df['collect_num'] > 0) |
+                    (df['is_follow_author'] == 1)
+                ),
+                'color': '#EF553B'
+            },
+            '3. 加购': {
+                'label': '加购',
+                'filter': lambda df: df['add2cart'] == 1,
+                'color': '#00CC96'
+            },
+            '4. 领券': {
+                'label': '领券',
+                'filter': lambda df: df['coupon_received'] == 1,
+                'color': '#AB63FA'
+            },
+            '5. 用券': {
+                'label': '用券',
+                'filter': lambda df: df['coupon_used'] == 1,
+                'color': '#FFA15A'
+            },
+            '6. 购买': {
+                'label': '购买',
+                'filter': lambda df: df['label'] == 1,
+                'color': '#19D3F3'
+            }
+        }
 
-        funnel_steps = ['浏览', '互动', '加购', '领券', '用券', '购买']
-        funnel_counts = [n_total, n_interact, n_add2cart, n_coupon_received, n_coupon_used, n_buyers]
+        # ---------- 前端按钮组组件 ----------
+        st.markdown("**📊 自定义漏斗链路环节**（红色=启用，灰色=禁用）")
+        btn_cols = st.columns(len(FUNNEL_ORDER))
+
+        forced_steps = {'1. 浏览', '6. 购买'}
+
+        for i, step_key in enumerate(FUNNEL_ORDER):
+            is_forced = step_key in forced_steps
+            is_active = step_key in st.session_state.funnel_active_steps
+            btn_label = FUNNEL_CONFIG[step_key]['label']
+            btn_type = "primary" if is_active else "secondary"
+
+            if is_forced:
+                # 浏览和购买强制保留，按钮禁用但显示为激活态
+                btn_cols[i].button(
+                    btn_label,
+                    key=f"funnel_btn_{step_key}",
+                    type=btn_type,
+                    disabled=True,
+                    use_container_width=True
+                )
+            else:
+                if btn_cols[i].button(
+                    btn_label,
+                    key=f"funnel_btn_{step_key}",
+                    type=btn_type,
+                    use_container_width=True
+                ):
+                    if is_active:
+                        st.session_state.funnel_active_steps.discard(step_key)
+                        # 领券是用券的前置，取消领券时自动取消用券
+                        if step_key == '4. 领券':
+                            st.session_state.funnel_active_steps.discard('5. 用券')
+                    else:
+                        st.session_state.funnel_active_steps.add(step_key)
+                        # 启用用券时自动启用其前置领券
+                        if step_key == '5. 用券':
+                            st.session_state.funnel_active_steps.add('4. 领券')
+                    st.rerun()
+
+        # 强制保留浏览和购买
+        st.session_state.funnel_active_steps.update(forced_steps)
+
+        # 按固定顺序排列
+        ordered_steps = [s for s in FUNNEL_ORDER if s in st.session_state.funnel_active_steps]
+
+        # ---------- 动态级联计算 ----------
+        current_df = filtered_df
+        funnel_labels = []
+        funnel_counts = []
+        funnel_colors = []
+        prev_count = len(current_df)
+
+        for step_key in ordered_steps:
+            config = FUNNEL_CONFIG[step_key]
+
+            # 若该环节有过滤条件，则在上一步子集上继续过滤
+            if config['filter'] is not None:
+                current_df = current_df[config['filter'](current_df)].copy()
+
+            # 线性递减兜底：当前人数不得超过上一步
+            count = min(len(current_df), prev_count)
+
+            # 若触发兜底，截断子集以保证后续环节基于合法规模
+            if count < len(current_df):
+                current_df = current_df.head(count).copy()
+
+            funnel_labels.append(config['label'])
+            funnel_counts.append(count)
+            funnel_colors.append(config['color'])
+            prev_count = count
+
+        n_total = funnel_counts[0] if funnel_counts else 0
 
         step_rates = []
         overall_rates = []
@@ -374,26 +477,48 @@ with tab1:
             overall_rates.append(safe_rate(count, n_total))
 
         hover_labels = [
-            f"{step}<br>人数: {count}<br>相对上一步: {step_rates[i]:.2%}<br>整体转化率: {overall_rates[i]:.2%}"
-            for i, (step, count) in enumerate(zip(funnel_steps, funnel_counts))
+            f"{label}<br>人数: {count:,}<br>相对上一步: {step_rates[i]:.2%}<br>整体转化率: {overall_rates[i]:.2%}"
+            for i, (label, count) in enumerate(zip(funnel_labels, funnel_counts))
         ]
 
+        # ---------- 文字位置动态适配 ----------
+        # 当某层宽度占比过小时，文字自动显示在右侧空白处
+        max_count = max(funnel_counts) if funnel_counts else 1
+        width_ratios = [c / max_count for c in funnel_counts]
+        text_positions = ['outside' if r < 0.15 else 'inside' for r in width_ratios]
+
+        # ---------- 动态渲染漏斗图 ----------
         fig_funnel = go.Figure(go.Funnel(
-            y=funnel_steps,
+            y=funnel_labels,
             x=funnel_counts,
-            textposition="inside",
-            textinfo="value+percent previous",
-            texttemplate="%{value:,}<br>%{percentPrevious:.1%}",
+            textposition=text_positions,
+            textinfo="value+percent initial+percent previous",
+            texttemplate=(
+                "%{value:,}<br>"
+                "整体: %{percentInitial:.1%}<br>"
+                "上一步: %{percentPrevious:.1%}"
+            ),
+            textfont=dict(size=14),  # 统一字体大小
             hovertext=hover_labels,
             hoverinfo="text",
             marker=dict(
-                color=["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3"],
+                color=funnel_colors,
                 line=dict(width=1, color="white")
             )
         ))
         fig_funnel.update_layout(height=420, margin=dict(t=20, b=20, l=40, r=40))
         fig_funnel.update_yaxes(autorange="reversed")
         st.plotly_chart(fig_funnel, use_container_width=True)
+
+        # ---------- 漏斗明细表 ----------
+        funnel_detail_df = pd.DataFrame({
+            '步骤': funnel_labels,
+            '人数': funnel_counts,
+            '相对上一步转化率': [f"{r:.2%}" for r in step_rates],
+            '总转化率': [f"{r:.2%}" for r in overall_rates],
+            '相对上一步流失': [f"{1 - r:.2%}" for r in step_rates]
+        })
+        st.dataframe(funnel_detail_df, use_container_width=True, hide_index=True)
 
     with right_col:
         st.markdown("#### RFM 用户分层象限")
