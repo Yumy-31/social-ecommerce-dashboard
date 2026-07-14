@@ -157,6 +157,7 @@ def get_filtered_data(selected_age, selected_gender, selected_category, selected
 def render_fixed_header():
     """渲染固定在页面顶端的数据源标识横幅"""
     display_text = "当前分析数据源：默认历史数据集 (active_data.csv)"
+    author_text = "作者：Yumy31"
 
     st.markdown(
         """
@@ -170,18 +171,29 @@ def render_fixed_header():
             color: #1f1f1f;
             padding: 10px 20px;
             font-size: 16px;
-            font-weight: bold;
-            text-align: left;
             z-index: 999999;
             border-bottom: 1px solid #d1d5db;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .fixed-data-source .data-source-title {
+            font-weight: bold;
+        }
+        .fixed-data-source .author-info {
+            font-weight: normal;
+            color: #4b5563;
         }
         /* 避免固定横幅遮挡主内容 */
         .main .block-container {
             padding-top: 60px !important;
         }
         </style>
-        <div class="fixed-data-source">""" + display_text + """</div>
+        <div class="fixed-data-source">
+            <span class="data-source-title">""" + display_text + """</span>
+            <span class="author-info">""" + author_text + """</span>
+        </div>
         """,
         unsafe_allow_html=True
     )
